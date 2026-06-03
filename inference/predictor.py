@@ -64,26 +64,26 @@ class LimiXPredictor:
         self.model_path = model_path
         self.device = device
         self.mix_precision = mix_precision
-        self.categorical_features_indices = categorical_features_indices
+        self.categorical_features_indices = categorical_features_indices # 输入类别变量索引，代码中未使用，还是通过 self.min_unique_num_for_numerical_infer 自动识别
         self.seed = seed
         self.inference_config = inference_config
         n_estimators = len(inference_config)
         assert n_estimators > 0, f"Invalid configuration file! the number of pipelines is 0!"
         self.n_estimators = n_estimators
         self.model = None
-        self.outlier_remove_std = outlier_remove_std
+        self.outlier_remove_std = outlier_remove_std # 检测异常值，由于默认12，几乎不删除异常值
         self.class_shuffle_factor = 3
         self.min_seq_len_for_category_infer = 100
         self.max_unique_num_for_category_infer = 30
-        self.min_unique_num_for_numerical_infer = 4
+        self.min_unique_num_for_numerical_infer = 4 # 唯一值小于4才被认为是类别变量
         self.preprocess_num = 10
-        self.softmax_temperature = softmax_temperature
+        self.softmax_temperature = softmax_temperature # 控制概率输出，默认0.9<1，输出的概率会更尖锐
         # self.task_type = task_type
         self.mask_prediction = mask_prediction        
         self.inference_with_DDP=inference_with_DDP
 
         if device.type == 'cpu':
-            if self.inference_config[0]["retrieval_config"]["use_retrieval"]:
+            if self.inference_config[0]["retrieval_config"]["use_retrieval"]: # cpu上不支持retrieval来筛选最相关的样本/特征，进行预测推理
                 raise ValueError("Retrieval is not supported for CPU inference! Please use the noretrieval configuration when running on a CPU device!")
             self.mix_precision = False
             print("Mixed precision is not supported for CPU inference, so it has been automatically disabled")
@@ -93,7 +93,7 @@ class LimiXPredictor:
         self.preprocess_pipelines = []
         self.preprocess_configs = []
 
-        self.build_preprocess_pipeline()
+        self.build_preprocess_pipeline() # 初始化构造了 pipeline
 
     def set_inference_config(self, inference_config: list|str, softmax_temperature:float|None=None, seed:int|None=None):
         if isinstance(inference_config, str):
@@ -103,7 +103,7 @@ class LimiXPredictor:
             else:
                 raise ValueError(f"inference_config is not a config file path: {inference_config}")
         self.inference_config = inference_config
-        n_estimators = len(inference_config)
+        n_estimators = len(inference_config) # 默认分类4个，回归8个
         assert n_estimators > 0, f"Invalid configuration file! the number of pipelines is 0!"
         self.n_estimators = n_estimators
         
@@ -121,7 +121,7 @@ class LimiXPredictor:
         rand_gen = np.random.default_rng(self.seed)
         self.seeds = [random.randint(0, 10000) for _ in range(self.n_estimators*self.preprocess_num)]
         start_idx = rand_gen.integers(0, 1000)
-        all_shifts = list(range(start_idx, start_idx + self.n_estimators))
+        all_shifts = list(range(start_idx, start_idx + self.n_estimators)) # 每个estimator的feature顺序不同
         self.all_shifts = rand_gen.choice(all_shifts, size=self.n_estimators, replace=False)
     
         if self.mask_prediction:
@@ -138,37 +138,37 @@ class LimiXPredictor:
             pipeline = []
             inference_config_item = self.inference_config[idx]
             retrieval_config = inference_config_item["retrieval_config"]
-            if retrieval_config["use_retrieval"] and retrieval_config["retrieval_before_preprocessing"]:
+            if retrieval_config["use_retrieval"] and retrieval_config["retrieval_before_preprocessing"]: # 默认config中 retrieval_before_preprocessing =false，也就是预处理前不会基于检索计算attention分数，也不会子采样
                 if retrieval_config["subsample_type"] == "sample":
                     assert retrieval_config[
                         "calculate_sample_attention"], "Retrieval on sample level must calculate sample attention score before."
-                    if retrieval_config["use_type"] == "mixed":
+                    if retrieval_config["use_type"] == "mixed": # only_sample mixed
                         assert retrieval_config[
                             "calculate_feature_attention"], "Retrieval on mixed type must calculate sample and feature attention score before."
-                if retrieval_config["subsample_type"] == "feature":
+                if retrieval_config["subsample_type"] == "feature": # sample feature
                     assert retrieval_config[
                         "calculate_feature_attention"], "Retrieval on sample level must calculate feature attention score before."
                 pipeline.append(
                     InferenceAttentionMap(self.model_path, retrieval_config["calculate_feature_attention"],
                                           retrieval_config["calculate_sample_attention"]))
                 pipeline.append(SubSampleData(retrieval_config["subsample_type"], retrieval_config["use_type"]))
-            if 'PolynomialInteractionGenerator' in inference_config_item:
+            if 'PolynomialInteractionGenerator' in inference_config_item: # 默认config中没有这一项  特征交互
                 pipeline.append(PolynomialInteractionGenerator(**inference_config_item['PolynomialInteractionGenerator']))
 
-            pipeline.append(FilterValidFeatures())
+            pipeline.append(FilterValidFeatures()) # 特征初筛
 
-            if 'RebalanceFeatureDistribution' in inference_config_item:
-                pipeline.append(RebalanceFeatureDistribution(**inference_config_item['RebalanceFeatureDistribution']))
-            if 'CategoricalFeatureEncoder' in inference_config_item:
+            if 'RebalanceFeatureDistribution' in inference_config_item: # 默认config中 包含  分布重采样
+                pipeline.append(RebalanceFeatureDistribution(**inference_config_item['RebalanceFeatureDistribution'])) # 
+            if 'CategoricalFeatureEncoder' in inference_config_item: # 默认config中 包含  类别编码
                 pipeline.append(CategoricalFeatureEncoder(**inference_config_item['CategoricalFeatureEncoder']))
-            if inference_config_item.get('FingerprintFeatureEncoder', False):
+            if inference_config_item.get('FingerprintFeatureEncoder', False): # 默认config中没有这一项
                 pipeline.append(FingerprintFeatureEncoder())
-            if 'FeatureShuffler' in inference_config_item:
+            if 'FeatureShuffler' in inference_config_item: # 默认config中 包含  特征顺序不同
                 shuffler = FeatureShuffler(**inference_config_item['FeatureShuffler'])
                 shuffler.offset = self.all_shifts[idx]
                 pipeline.append(shuffler)
             
-            if retrieval_config["use_retrieval"] and not retrieval_config["retrieval_before_preprocessing"]:
+            if retrieval_config["use_retrieval"] and not retrieval_config["retrieval_before_preprocessing"]: # 预处理后  再 retrieval
                 if retrieval_config["subsample_type"] == "sample":
                     assert retrieval_config[
                         "calculate_sample_attention"], "Retrieval on sample level must calculate sample attention score before."
@@ -202,8 +202,8 @@ class LimiXPredictor:
         """
         # Validate both x and y simultaneously
         if y is not None:
-            x, y = check_X_y(x, y, **check_params)
-            self._check_n_features(x, reset=reset)
+            x, y = check_X_y(x, y, **check_params)  # 检查 X 和 y 的长度是否一致，ensure_all_finite=False允许传入缺失值
+            self._check_n_features(x, reset=reset) # X的特征列
             return x, y
 
         # Validate X
@@ -227,12 +227,12 @@ class LimiXPredictor:
         else:
             raise ValueError(f"Unsupport string dtypes! {x.dtype}")
 
-        integer_columns = x.select_dtypes(include=["number"]).columns
+        integer_columns = x.select_dtypes(include=["number"]).columns # 数值变量统一为 float64
         if len(integer_columns) > 0:
             x[integer_columns] = x[integer_columns].astype(dtypes)
         return x
     
-    def convert_category2num(self, x, dtype:np.floating=np.float64, placeholder: str = NA_PLACEHOLDER,):
+    def convert_category2num(self, x, dtype:np.floating=np.float64, placeholder: str = NA_PLACEHOLDER,): # 只编码非缺失值部分
         ordinal_encoder = OrdinalEncoder(categories="auto",
                                         dtype=dtype,
                                         handle_unknown="use_encoded_value",
@@ -246,7 +246,7 @@ class LimiXPredictor:
         
         string_cols = x.select_dtypes(include=["string", "object"]).columns
         if len(string_cols) > 0:
-            x[string_cols] = x[string_cols].fillna(placeholder)
+            x[string_cols] = x[string_cols].fillna(placeholder) # 用占位符 处理缺失值
         
         X_encoded = col_encoder.fit_transform(x)
 
@@ -257,7 +257,7 @@ class LimiXPredictor:
             placeholder_mask,
             np.nan,
             X_encoded[:, string_cols_ix_2],
-        )
+        ) # 缺失占位符还原为 nan
 
         return X_encoded
 
@@ -295,7 +295,7 @@ class LimiXPredictor:
         x_test = self.validate_data(x_test, reset=True, validate_separately=False, accept_sparse=False, dtype=None, ensure_all_finite=False)
         
         # "Concatenate x_train and x_test to ensure the preprocessing logic is completely consistent.
-        x = np.concatenate([x_train, x_test], axis=0)
+        x = np.concatenate([x_train, x_test], axis=0) # 合并处理，防止训练集中 北京编码1，训练集中广州编码1
         
         # Encode y_train
         self.label_encoder = LabelEncoder()
@@ -317,7 +317,7 @@ class LimiXPredictor:
         x = self.convert_x_dtypes(x)
         x = self.convert_category2num(x)
         x = x.astype(np.float32)
-        categorical_idx = self.get_categorical_features_indices(x)
+        categorical_idx = self.get_categorical_features_indices(x) # 唯一值小于4 
         outputs = []
         mask_predictions = []
         for id_pipe, pipe in enumerate(self.preprocess_pipelines):

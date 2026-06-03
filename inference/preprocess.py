@@ -158,7 +158,7 @@ class FilterValidFeatures(BasePreprocess):
     def fit(self, x:np.ndarray, categorical_features:list[int], seed:int, y:np.ndarray | None = None, **kwargs) -> list[int]:
         self.categorical_idx = categorical_features
         self.valid_features = ((x[0:1, :] == x).mean(axis=0) < 1.0).tolist()
-        self.invalid_indices = ((x[0:1, :] == x).mean(axis=0) == 1.0).tolist()
+        self.invalid_indices = ((x[0:1, :] == x).mean(axis=0) == 1.0).tolist() # 是否每一行都等于第一行，也就是判断是否是一个常数列
 
         if y is not None:
             eval_pos = len(y)
@@ -167,8 +167,8 @@ class FilterValidFeatures(BasePreprocess):
             nan_test = np.isnan(x[eval_pos:, :])
             all_nan_test = np.all(nan_test, axis=0)
             
-            features_nan = all_nan_train | all_nan_test
-            self.valid_features = self.valid_features & ~features_nan
+            features_nan = all_nan_train | all_nan_test # 全为缺失值的列
+            self.valid_features = self.valid_features & ~features_nan # 保留非常数列以及非全缺失列
             self.invalid_indices = self.invalid_indices | features_nan
 
         if not any(self.valid_features):
@@ -178,7 +178,7 @@ class FilterValidFeatures(BasePreprocess):
             index
             for index, idx in enumerate(np.where(self.valid_features)[0])
             if idx in categorical_features
-        ]
+        ] # 更新最新的类别特征列
 
         return self.categorical_idx
     
@@ -263,7 +263,7 @@ class CategoricalFeatureEncoder(BasePreprocess):
         categorical_features: list[int],
     ) -> tuple[np.ndarray, list[int]]:
         # print(f"encoding_strategy: {self.encoding_strategy}")
-        ct, categorical_features = self._create_transformer(X, categorical_features)
+        ct, categorical_features = self._create_transformer(X, categorical_features) # 根据config中配置决定是  ordinal one-hot 不编码
         if ct is None:
             self.transformer = None
             return X, categorical_features
@@ -280,12 +280,12 @@ class CategoricalFeatureEncoder(BasePreprocess):
                     col_cats = len(
                         ct.named_transformers_["ordinal_encoder"].categories_[col_ix],
                     )
-                    perm = rng.permutation(col_cats)
+                    perm = rng.permutation(col_cats) # 对类别变量列内 随机换顺序，置换列 # 例如 [2,0,1]
                     self.category_mappings[col_ix] = perm
                     
                     col_data = Xt[:, col_ix]
                     valid_mask = ~np.isnan(col_data)
-                    col_data[valid_mask] = perm[col_data[valid_mask].astype(int)].astype(col_data.dtype)
+                    col_data[valid_mask] = perm[col_data[valid_mask].astype(int)].astype(col_data.dtype) # 列内：原编码 0→2, 1→0, 2→1
 
         elif self.encoding_strategy == "onehot":
             Xt = ct.fit_transform(X)
@@ -310,7 +310,7 @@ class CategoricalFeatureEncoder(BasePreprocess):
         """Retrieve the smallest count value among categorical features"""
         if len(column) == 0:
             return 0
-        return int(np.unique(column, return_counts=True)[1].min())
+        return int(np.unique(column, return_counts=True)[1].min()) # 计算每个唯一值的样本数的最小
 
     def _create_transformer(self, data: np.ndarray, categorical_columns: list[int]) -> tuple[ColumnTransformer | None, list[int]]:
         """Create an appropriate column transformer"""
@@ -321,8 +321,8 @@ class CategoricalFeatureEncoder(BasePreprocess):
                 categorical_columns = [
                     idx for idx in categorical_columns 
                     if self._is_valid_common_category(data[:, idx], suffix)
-                ]
-            remainder_columns = [idx for idx in range(data.shape[1]) if idx not in categorical_columns]
+                ] # 唯一值<4且 唯一值下的样本数>=10
+            remainder_columns = [idx for idx in range(data.shape[1]) if idx not in categorical_columns] 
             self.feature_indices = categorical_columns + remainder_columns
                 
             return ColumnTransformer(
@@ -348,7 +348,7 @@ class CategoricalFeatureEncoder(BasePreprocess):
         
         if "strict_feature_shuffled" in suffix:
             return min_count >= 10 and unique_count < (len(column) // 10)
-        return min_count >= 10
+        return min_count >= 10 # 判断唯一值的样本数 是否都大于10
 
 class QTx(QuantileTransformer):
     """
@@ -444,16 +444,21 @@ class RebalanceFeatureDistribution(BasePreprocess):
             joined_log_normal: bool = True,
     ):
         super().__init__()
-        self.worker_tags = worker_tags
-        self.discrete_flag = discrete_flag
-        self.original_flag = original_flag
+        self.worker_tags = worker_tags # config中有 null 、quantile_uniform_10
+        self.discrete_flag = discrete_flag # 外层强制修改为 true
+        self.original_flag = original_flag 
         self.random_state = None
-        self.svd_tag = svd_tag
+        self.svd_tag = svd_tag # config中有 null 、svd
         self.worker: Pipeline | ColumnTransformer | None = None
         self.joined_svd_feature = joined_svd_feature
         self.joined_log_normal = joined_log_normal
         self.feature_indices = None
 
+    # 分类默认（cls_default_noretrieval.json，4 条 pipeline）典型组合：
+        # Pipeline 1–2：quantile_uniform_10 + original_flag=true + svd_tag=svd + ordinal_strict_feature_shuffled
+        # Pipeline 3–4：worker_tags=[null] + discrete_flag=true + 无 SVD + encoding_strategy=numeric（几乎不变换，作 ensemble 对照）
+    # 回归默认（reg_default_noretrieval.json，8 条）：除 quantile_uniform_all_data + SVD 外，还有 power + onehot 等组合（论文 §5 里 log-normal / power 类增强在回归侧更重）。
+    
     @override
     def fit(self, x:np.ndarray, categorical_features:list[int], seed:int, **kwargs) -> list[int]:
         self.random_state = seed
@@ -472,9 +477,9 @@ class RebalanceFeatureDistribution(BasePreprocess):
     def fit_transform(self, x:np.ndarray, categorical_features:list[int], seed:int, *, y:np.ndarray, **kwargs)->tuple[np.ndarray, list[int]]:
         """Fit the preprocessing model to the data and transform the data"""
         assert y is not None, "The input y cannot be None"
-        x_train_ = x[:len(y)]
+        x_train_ = x[:len(y)] # 注意外部传入y 只是y_train 但x 是x_train x_test拼接在一起的
         x_test_ = x[len(y):]
-        if x_train_.shape[1] != x_test_.shape[1]:
+        if x_train_.shape[1] != x_test_.shape[1]: #尽量保持x_train x_test特征一致
             x_test_ = x_test_[:, :x_train_.shape[1]]
         categorical_idx_ = self.fit(x_train_, categorical_features, seed)
         x_train_, categorical_idx_ = self.transform(x_train_)
@@ -490,7 +495,7 @@ class RebalanceFeatureDistribution(BasePreprocess):
         static_seed, rng = infer_random_state(self.random_state)
         all_ix = list(range(n_features))
         workers = []
-        cont_ix = [i for i in all_ix if i not in categorical_features]
+        cont_ix = [i for i in all_ix if i not in categorical_features] # 数值列
         if self.original_flag:
             trans_ixs = categorical_features + cont_ix if self.discrete_flag else cont_ix
             workers.append(("original", "passthrough", all_ix))
@@ -498,13 +503,13 @@ class RebalanceFeatureDistribution(BasePreprocess):
         elif self.discrete_flag:
             # trans_ixs = all_ix
             # dis_ix = categorical_features
-            trans_ixs = categorical_features + cont_ix
+            trans_ixs = categorical_features + cont_ix # 对全部特征列做变换
             self.feature_indices = categorical_features + cont_ix
             dis_ix = []
         else:
             workers.append(("discrete", "passthrough", categorical_features))
             trans_ixs, dis_ix = cont_ix, list(range(len(categorical_features)))
-        for worker_tag in self.worker_tags:
+        for worker_tag in self.worker_tags: # 这里的循环是对选中列进行尺度变换
             # print(f"== worker_tag: \033[31m{worker_tag}\033[0m")
             if worker_tag == "logNormal":
                 sworker = Pipeline(steps=[
@@ -636,18 +641,18 @@ class RebalanceFeatureDistribution(BasePreprocess):
                 self.n_quantile_features = len(trans_ixs)
             workers.append((f"feat_transform_{worker_tag}", sworker, trans_ixs))
 
-        CT_worker = ColumnTransformer(workers,remainder="drop",sparse_threshold=0.0)
+        CT_worker = ColumnTransformer(workers,remainder="drop",sparse_threshold=0.0) # 把变换后的特征列拼接回，变成宽表
         if self.svd_tag == "svd" and n_features >= 2:
             svd_worker = FeatureUnion([
                     ("default", FunctionTransformer(func=lambda x: x)),
                     ("svd",Pipeline(steps=[
                                     ("save_standard",Pipeline(steps=[
                                     ("i2n_pre", FunctionTransformer(func=lambda x: np.nan_to_num(x, nan=np.nan, neginf=np.nan, posinf=np.nan),inverse_func=lambda x: x, check_inverse=False)),
-                                    ("fill_missing_pre", SimpleImputer(missing_values=np.nan, strategy="mean", keep_empty_features=True)),
-                                    ("standard", StandardScaler(with_mean=False)) ,
+                                    ("fill_missing_pre", SimpleImputer(missing_values=np.nan, strategy="mean", keep_empty_features=True)), # 均值填充 nan
+                                    ("standard", StandardScaler(with_mean=False)) , # 标准化
                                     ("i2n_post", FunctionTransformer(func=lambda x: np.nan_to_num(x, nan=np.nan, neginf=np.nan, posinf=np.nan),inverse_func=lambda x: x, check_inverse=False)),
                                     ("fill_missing_post", SimpleImputer(missing_values=np.nan, strategy="mean", keep_empty_features=True))])),
-                                    ("svd",TruncatedSVD(algorithm="arpack",n_components=max(1,min(n_samples // 10 + 1,n_features // 2)),random_state=static_seed))]))
+                                    ("svd",TruncatedSVD(algorithm="arpack",n_components=max(1,min(n_samples // 10 + 1,n_features // 2)),random_state=static_seed))])) # 类似于PCA主成分。在宽表中找到最强的k个线性组合方向，每个方向作为一列新特征
                     ])
             self.svd_n_comp = max(1,min(n_samples // 10 + 1,n_features // 2))
             worker = Pipeline([("worker", CT_worker), ("svd_worker", svd_worker)])

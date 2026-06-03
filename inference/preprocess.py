@@ -682,13 +682,13 @@ class SubSampleData():
             subsample_ratio: float | int = 200,
             subsample_idx:list[int] | np.ndarray[int] = None,
             ):
-        if isinstance(subsample_ratio, float):
+        if isinstance(subsample_ratio, float): # 如果是float
             if self.subsample_type == "sample":
                 self.subsample_num = int(subsample_ratio * x.shape[0])
             else:
                 self.subsample_num = int(subsample_ratio * x.shape[1])
         else:
-            self.subsample_num = subsample_ratio
+            self.subsample_num = subsample_ratio # 如果是int，直接作为subsample数量
         if self.subsample_type == "sample":
             if self.use_type == "mixed":
                 y_feature_attention_score = feature_attention_score[:, -1, :].squeeze().permute(1, 0).unsqueeze(

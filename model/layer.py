@@ -58,10 +58,10 @@ class MLP(torch.nn.Module):
        
         if depth == 1:
             self.layers.append(nn.Linear(in_features, out_features, bias=has_bias, device=device, dtype=dtype))
-        else:
+        else: # 默认depth=2
              # input layer
             self.layers.append(nn.Linear(in_features, hidden_size, bias=has_bias, device=device, dtype=dtype))
-            self.layers.append(ACTIVATION_FN[self.activation])
+            self.layers.append(ACTIVATION_FN[self.activation]) # 默认gelu函数
             # hidden layers
             for i in range(depth - 2):
                 self.layers.append(nn.Linear(hidden_size, hidden_size, bias=has_bias, device=device, dtype=dtype))
@@ -407,7 +407,7 @@ class EncoderBaseLayer(nn.Module):
         self.seq_attn_num = 1             # sequence attention number
         self.mlp_num = 1                    # mlp number
         if layer_arch == 'fmfmsm':
-            self.feature_attn_num = 2
+            self.feature_attn_num = 2 # 2层feature之间的attention
             self.mlp_num = 3
         
         self.self_share_all_kv_heads = self_share_all_kv_heads
@@ -430,7 +430,7 @@ class EncoderBaseLayer(nn.Module):
                                                                 dropout=self.dropout,
                                                                 recompute=self.recompute_attn,
                                                         ) 
-                                                        for _ in range(self.feature_attn_num)
+                                                        for _ in range(self.feature_attn_num) # 特征/列之间attention
                                                     ]
                                                 )
         self.sequence_attentions = nn.ModuleList(
@@ -444,7 +444,7 @@ class EncoderBaseLayer(nn.Module):
                                                             dropout=self.dropout,
                                                             recompute=self.recompute_attn,
                                                         ) 
-                                                        for _ in range(self.seq_attn_num)
+                                                        for _ in range(self.seq_attn_num) # 样本/行之间attention
                                                     ]
                                                 )
         self.mlp = nn.ModuleList(
@@ -464,14 +464,14 @@ class EncoderBaseLayer(nn.Module):
                                  )
         
         self.layer_steps = []
-        if self.layer_arch == 'fmfmsm':
+        if self.layer_arch == 'fmfmsm': # 默认结构 2层feature+1层样本
             assert len(self.feature_attentions) >= 2 and len(self.sequence_attentions) >= 1 and len(self.mlp) >= 3
             self.layer_steps = [
                                 partial(
                                     self.call_features_attention,
                                     index=0
                                 ),
-                                self.mlp[0],
+                                self.mlp[0], # linear + gelu + linear
                                 partial(
                                     self.call_features_attention,
                                     index=1
@@ -560,7 +560,7 @@ class EncoderBaseLayer(nn.Module):
                         x = x[:, :eval_pos].transpose(1, 2),
                         x_kv = x[:, :eval_pos].transpose(1, 2),
                         copy_first_head_kv = True if self.self_share_all_kv_heads else False,
-                    )[0].transpose(1, 2)
+                    )[0].transpose(1, 2) # 训练集计算 内部交叉attention
 
         if self.seq_attn_serial:
             x[:, :eval_pos] = x_train
@@ -571,7 +571,7 @@ class EncoderBaseLayer(nn.Module):
                                                     x_kv=x[:, :eval_pos].transpose(1, 2),
                                                     copy_first_head_kv=True if self.cross_share_all_kv_heads else False,
                                                     calculate_sample_attention=calculate_sample_attention
-                                                )
+                                                ) # 测试集只计算test与train的attention
             x_test=x_test.transpose(1, 2)
         else:
             x_test = None
@@ -590,12 +590,12 @@ class EncoderBaseLayer(nn.Module):
         feature_attenion=None
         sample_attention=None
         for idx, (sublayer, layer_norm) in enumerate(zip(self.layer_steps, self.layer_norms)):
-            if self.pre_norm:
-                residual = x
-                x = layer_norm(x)
-                if idx == 2 and calculate_feature_attention and layer_idx == 11:
+            if self.pre_norm: # 默认false
+                residual = x # 取残差
+                x = layer_norm(x) # layernorm处理
+                if idx == 2 and calculate_feature_attention and layer_idx == 11: # 如果是第12层，且现在是idx=2（第2个featureatt后），那么记录featuren attention
                     x, feature_attenion, _ = sublayer(x, feature_atten_mask, eval_pos,calculate_feature_attention=True)
-                elif idx == 4 and calculate_sample_attention and layer_idx == 11:
+                elif idx == 4 and calculate_sample_attention and layer_idx == 11: # 如果是第12层，且现在是idx=4（sampleatt后），那么记录sample attention
                     x, _, sample_attention = sublayer(x, feature_atten_mask, eval_pos,calculate_sample_attention=True)
                 else:
                     if isinstance(sublayer, functools.partial):
@@ -606,9 +606,9 @@ class EncoderBaseLayer(nn.Module):
                         x = sublayer(x)
                         if isinstance(x, tuple):
                             x = x[0]
-                x = x + residual
+                x = x + residual 
             else:
-                residual = x
+                residual = x # 残差不做layernorm处理
                 if idx == 2 and calculate_feature_attention and layer_idx == 11:
                     x, feature_attenion, _ = sublayer(x, feature_atten_mask, eval_pos,calculate_feature_attention=True)
                     x = x + residual
@@ -625,8 +625,8 @@ class EncoderBaseLayer(nn.Module):
                         x = sublayer(x)
                         if isinstance(x, tuple):
                             x = x[0]
-                        x = x + residual
-                x=layer_norm(x)
+                        x = x + residual # 对应limix图中的 把残差加到attention后
+                x=layer_norm(x) # 统一layernorm后再继续循环
         return x,feature_attenion,sample_attention
                 
 class LayerStack(nn.Module):

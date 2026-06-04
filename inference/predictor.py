@@ -6,8 +6,8 @@ from inference.preprocess import (
     RebalanceFeatureDistribution, 
     FingerprintFeatureEncoder,
     PolynomialInteractionGenerator,
-    SubSampleData)
-from utils.loading import load_model
+    SubSampleData) 
+from utils.loading import load_model # 这里调用了model/transformer.py 开启了一系列的embedding + transformer处理
 import torch
 from typing import List, Literal
 import random

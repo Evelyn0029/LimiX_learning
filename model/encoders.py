@@ -341,18 +341,18 @@ class MaskEmbEncoder(nn.Module):
         batch_size, seq_len, group, feature_num = x.shape
 
         x = x.unsqueeze(-1)
-        is_mask = torch.isnan(x)
-        x = x.masked_fill(is_mask, 0.0)
+        is_mask = torch.isnan(x) # 这一步留出 缺失值的位置信息
+        x = x.masked_fill(is_mask, 0.0) # 这一步缺失值填充0是为了能够mlp编码
         
         x_emb = self.numeric_mlp(x)
 
-        mask_emb = self.mask_embedding.expand_as(x_emb)
-        combined_emb = torch.where(is_mask, mask_emb, x_emb)
+        mask_emb = self.mask_embedding.expand_as(x_emb) # 形状 广播 同 x_emb一样
+        combined_emb = torch.where(is_mask, mask_emb, x_emb) # 若 is_mask 为 True  → 取 mask_emb ；若 is_mask 为 False → 取 x_emb
         del x, is_mask, x_emb
 
         concat_vector = combined_emb.flatten(3)
 
-        sample_representation = self.fusion_network(concat_vector)
+        sample_representation = self.fusion_network(concat_vector) # 上述编码过程造成维度变化，这一步是为了变回原来的维度
         output = sample_representation.view(batch_size, seq_len, group, -1)
         
         input[self.out_key] = output
@@ -384,21 +384,21 @@ class NanEncoder(nn.Module):
         x:torch.Tensor = input[self.in_keys[0]] # type: ignore
         eval_pos = input['eval_pos']
         
-        mean_value, _ = calc_mean(x[:,:eval_pos,:], dim=1)
+        mean_value, _ = calc_mean(x[:,:eval_pos,:], dim=1) # 均值计算
         
-        nans_indicator = torch.zeros_like(x, dtype=x.dtype)
-        nans_indicator[torch.isnan(x)] = self.nan_value
+        nans_indicator = torch.zeros_like(x, dtype=x.dtype) 
+        nans_indicator[torch.isnan(x)] = self.nan_value # nan 填充为 .nan_value
         pos_inf_mask = torch.isinf(x) & (torch.sign(x) == 1)
-        nans_indicator[pos_inf_mask] = self.inf_value
+        nans_indicator[pos_inf_mask] = self.inf_value # 无穷大 填充为 inf_value
         neg_inf_mask = torch.isinf(x) & (torch.sign(x) == -1)
-        nans_indicator[neg_inf_mask] = self.neg_info_value
+        nans_indicator[neg_inf_mask] = self.neg_info_value # # 无穷小 填充为 neg_info_value
         nan_mask = torch.logical_or(torch.isnan(x), torch.isinf(x))
         # avoid inplace operations
         x = x.clone()
-        x[nan_mask] = mean_value.unsqueeze(1).expand_as(x)[nan_mask]
+        x[nan_mask] = mean_value.unsqueeze(1).expand_as(x)[nan_mask] # 均值填充 无穷大、缺失值
         
-        input[self.in_keys[0]] = x
-        input[self.out_key ] = nans_indicator
+        input[self.in_keys[0]] = x # 存储填充后的数据
+        input[self.out_key ] = nans_indicator # 保留了原始的 nan 信息
         return input
         
     
@@ -429,8 +429,8 @@ class ValidFeatureEncoder(nn.Module):
     
     def forward(self, input:dict[str, torch.Tensor|int])->dict[str, torch.Tensor]:
         x:torch.Tensor = input[self.in_keys[0]]  # type: ignore
-        valid_feature = ~torch.all(x == x[:, 0:1, :], dim=1)
-        self.valid_feature_num = torch.clip(valid_feature.sum(-1).unsqueeze(-1),min=1)
+        valid_feature = ~torch.all(x == x[:, 0:1, :], dim=1) # 取有效特征列：非常数列
+        self.valid_feature_num = torch.clip(valid_feature.sum(-1).unsqueeze(-1),min=1) # 有效特征列的总数
 
         if self.nan_normalize:
             if self.sqrt_normalize:
@@ -443,7 +443,7 @@ class ValidFeatureEncoder(nn.Module):
             self.num_features - x.shape[-1],
             device=x.device,
             dtype=x.dtype,
-        )
+        ) # 补零操作，如果模型要求 num_features 个特征，但是 valid_feature_num 比较少，剩下的列用0补充
         x = torch.cat([x, zeros], -1)
         
         input[self.out_key] = x
@@ -480,7 +480,7 @@ class EmbYEncoderStep(nn.Module):
         y_embed_weights = ortho_matrix[:n_classes, :]  # Shape (n_classes, emsize)
         y_mask_weight = ortho_matrix[n_classes:n_classes+1, :]  # Shape (1, emsize)
 
-        self.y_embedding = nn.Embedding(n_classes, emsize)
+        self.y_embedding = nn.Embedding(n_classes, emsize) # y使用类别变量的nn.embedding
         self.y_embedding.weight.data = y_embed_weights.clone()
 
         self.y_mask = nn.Embedding(1, emsize)
@@ -495,9 +495,9 @@ class EmbYEncoderStep(nn.Module):
         eval_pos = input['eval_pos']
         y = y.int() # type: ignore
         y_train = y[:,:eval_pos]
-        y_test = torch.zeros_like(y[:, eval_pos:], dtype=torch.int)
-        y_train_emb = self.y_embedding(y_train).to(torch.float16)
-        y_test_emb = self.y_mask(y_test).to(torch.float16)
+        y_test = torch.zeros_like(y[:, eval_pos:], dtype=torch.int) # 测试集 置为0
+        y_train_emb = self.y_embedding(y_train).to(torch.float16) # 训练集，查表 embedding
+        y_test_emb = self.y_mask(y_test).to(torch.float16) # 测试集，统一 y_mask 向量
         y_emb = torch.cat([y_train_emb, y_test_emb], dim=1)
         
         input[self.out_key] = y_emb
@@ -525,7 +525,7 @@ class MulticlassTargetEncoder(nn.Module):
         eval_pos = input['eval_pos']
         unique_xs = [
             torch.unique(x[b, :eval_pos]) for b in range(x.shape[0])
-        ]
+        ] # 按照y中的大小顺序排序，重新进行编码
         x_ = x.clone()
         for b in range(x.shape[0]):
             x_[b, :, :] = (x[b, :, :].unsqueeze(-1) > unique_xs[b]).sum(dim=-1)
@@ -664,7 +664,7 @@ def preprocesss_4_x(
     preprocess_steps = []
 
     # Obtain the positions of features with NaN and Inf values, and replace these features with the mean of the corresponding feature
-    preprocess_steps += [NanEncoder(in_keys=['data'], out_key='nan_encoding')]   
+    preprocess_steps += [NanEncoder(in_keys=['data'], out_key='nan_encoding')]   # 对无穷大值、缺失值填充  同时保留了缺失值原始列
     
     if nan_handling_enabled:
         inputs_to_merge["nan_encoding"] = {"dim": num_features}
@@ -678,7 +678,7 @@ def preprocesss_4_x(
                 in_keys=["nan_encoding"],
                 out_key="nan_encoding"
             ),
-        ]
+        ] # 用 0 补维
 
     preprocess_steps += [
         NormalizationEncoder(
@@ -686,7 +686,7 @@ def preprocesss_4_x(
             normalize_x=normalize_x,
             remove_outliers=remove_outliers,
         ),
-    ]
+    ] # 删除异常值，标准化
 
     preprocess_steps += [
         # Convert the input into a fixed number of features by adding zero values, with normalization applied (variance is constant).

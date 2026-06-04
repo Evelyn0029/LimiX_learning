@@ -403,9 +403,9 @@ class KDIX(KDITransformer):
         else:
             base = np.asarray(X)
 
-        # replace NaNs with col means for training
-        means = np.nanmean(base, axis=0)
-        cleaned = np.where(np.isnan(base), means, base)
+        # replace NaNs with col s for training
+        s = np.nan(base, axis=0)
+        cleaned = np.where(np.isnan(base), s, base)
 
         return super().fit(cleaned, y)  # type: ignore
 
@@ -419,10 +419,10 @@ class KDIX(KDITransformer):
         # track NaNs
         nan_pos = np.isnan(mat)
 
-        # impute with column means (zero fallback)
-        col_means = np.nanmean(mat, axis=0)
-        col_means = np.where(np.isnan(col_means), 0, col_means)
-        filled = np.where(np.isnan(mat), col_means, mat)
+        # impute with column s (zero fallback)
+        col_s = np.nan(mat, axis=0)
+        col_s = np.where(np.isnan(col_s), 0, col_s)
+        filled = np.where(np.isnan(mat), col_s, mat)
 
         # apply KDI
         res = super().transform(filled)
@@ -639,7 +639,7 @@ class RebalanceFeatureDistribution(BasePreprocess):
         CT_worker = ColumnTransformer(workers,remainder="drop",sparse_threshold=0.0)
         if self.svd_tag == "svd" and n_features >= 2:
             svd_worker = FeatureUnion([
-                    ("default", FunctionTransformer(func=lambda x: x)),
+                    ("default", FunctionTransformer(func=lambda x: x)), # 这一步保留不处理的x，还保留有缺失值
                     ("svd",Pipeline(steps=[
                                     ("save_standard",Pipeline(steps=[
                                     ("i2n_pre", FunctionTransformer(func=lambda x: np.nan_to_num(x, nan=np.nan, neginf=np.nan, posinf=np.nan),inverse_func=lambda x: x, check_inverse=False)),

@@ -69,13 +69,16 @@ class FeaturesTransformer(nn.Module):
             mlp_use_residual=self.mlp_use_residual,
             layer_arch=self.layer_arch, # type: ignore
             **layer_kwargs
-        )
+        )  # 在已经 embed 好的张量上，交替做 特征维注意力（列之间）和 序列维注意力（行之间，train 自注意力 + test 对 train 的 cross-attention），中间夹 MLP。默认堆 nlayers 层（如 12 层）组成 LayerStack
 
-        self.encoder_x = get_x_encoder( **encoder_config_x)
-        self.cls_y_encoder = get_cls_y_encoder(**encoder_config_y)
-        self.reg_y_encoder = get_reg_y_encoder(**encoder_config_y)
 
-        self.transformer_encoder = LayerStack([layer_creator() for _ in range(self.nlayers)])
+        # 先构造编码器、解码器
+
+        self.encoder_x = get_x_encoder( **encoder_config_x) # 对x进行编码，非缺失值进行mlp编码，缺失值进行mask_embedding
+        self.cls_y_encoder = get_cls_y_encoder(**encoder_config_y) # 训练集 进行 nn.embedding编码，测试集标签统一置为0 也用nn.embedding编码，相当于mask测试集标签
+        self.reg_y_encoder = get_reg_y_encoder(**encoder_config_y) # 应用linear编码映射
+
+        self.transformer_encoder = LayerStack([layer_creator() for _ in range(self.nlayers)]) # 按照论文，分类12层 回归18层
         self.encoder_out_norm = nn.LayerNorm(self.embed_dim, eps=1e-5, elementwise_affine=False) if pre_norm else nn.Identity()
 
         self.cls_y_decoder = nn.Sequential(
@@ -104,7 +107,7 @@ class FeaturesTransformer(nn.Module):
         elif feature_positional_embedding_type == "subortho":
             self.feature_positional_embedding = nn.Linear(self.embed_dim // 4, self.embed_dim)
         
-        self.x_preprocess = preprocesss_4_x(**preprocess_config_x)
+        self.x_preprocess = preprocesss_4_x(**preprocess_config_x) 
 
 
     def forward(self, x: torch.Tensor, 
@@ -146,15 +149,15 @@ class FeaturesTransformer(nn.Module):
                             device=x[k].device,
                             dtype=x[k].dtype
                         )
-                    ),
+                    ), # 0 补充维度
                     dim=-1
                 )
         for k in x:
             x[k] = x[k].reshape(batch_size, seq_len, x[k].shape[2]//self.features_per_group, self.features_per_group)
         x['eval_pos'] = eval_pos
-        preprocessed_x = self.x_preprocess(x)
-        preprocessed_x = self.process_4_x(preprocessed_x)
-        x_encoder_result = self.encoder_x(preprocessed_x)
+        preprocessed_x = self.x_preprocess(x) # 填充缺失值、归一化、补维
+        preprocessed_x = self.process_4_x(preprocessed_x) # 把「原本是缺失」的位置再标成 nan
+        x_encoder_result = self.encoder_x(preprocessed_x) # mlp embedding + mask embedding
         x_emb_result = x_encoder_result['data']
         
         for k in y:
@@ -176,19 +179,19 @@ class FeaturesTransformer(nn.Module):
                     dim=1
                 )
         # Mask the test y
-        y["data"][:, eval_pos:] = torch.nan
+        y["data"][:, eval_pos:] = torch.nan # 测试集用 nan mask
         
         if task_type == 'cls':
             y_type =  torch.zeros_like(y['data'], device=y['data'].device)
         else:
             y_type =  torch.ones_like(y['data'], device=y['data'].device)
             
-        embedded_y = self.mixed_y_embedding(y, y_type=y_type, eval_pos=eval_pos)
+        embedded_y = self.mixed_y_embedding(y, y_type=y_type, eval_pos=eval_pos) # 训练集先encode再nn.embedding 测试集全部用0 embedding 也就是mask 测试集
 
         if torch.isnan(embedded_y).any():
             raise ValueError("embedded_y contains NaN values; please add a NanEncoder in the encoder")
         
-        embedded_x = self.add_embeddings(x_emb_result)
+        embedded_x = self.add_embeddings(x_emb_result) # x 加特征位置编码
         embedded_all = torch.cat((embedded_x, embedded_y.unsqueeze(2)), dim=2)
         if torch.isnan(embedded_all).any():
             raise ValueError("embedded_all contains NaN values; please add a NanEncoder in the encoder")
@@ -201,12 +204,12 @@ class FeaturesTransformer(nn.Module):
         encoder_out = self.transformer_encoder(embedded_all, feature_atten_mask=None, eval_pos=eval_pos, **kwargs)[0]
         encoder_out = self.encoder_out_norm(encoder_out)
         
-        test_encoder_out = encoder_out[:, eval_pos:, -1]
+        test_encoder_out = encoder_out[:, eval_pos:, -1] # 只对test行 最后一列  进行decode
         test_y_type = y_type[:,eval_pos:]
         encoder_out_4_feature = encoder_out[:, :, :-1, :]
         if self.mask_prediction:
             cls_output, reg_output = self.y_decoder(test_encoder_out, test_y_type)
-            feature_pred = self.feature_decoder(encoder_out_4_feature)
+            feature_pred = self.feature_decoder(encoder_out_4_feature) # mask_prediction=true时多加一步，输出对mask/缺失值的预测
             output_decoded = {
                 "cls_output": cls_output,
                 "reg_output": reg_output,
@@ -269,7 +272,7 @@ class FeaturesTransformer(nn.Module):
         mask = data['mask'].to(torch.bool)
         x_input = torch.where(mask, float('nan'), x_input)
         data['data'] = x_input
-        return data
+        return data # 把「原本是缺失」的位置再标成 nan
     
     def add_embeddings(self, x:torch.Tensor):
         if self.feature_positional_embedding_type == "subortho":
